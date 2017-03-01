@@ -3460,9 +3460,6 @@ construct_dpdk_options(const struct smap *ovs_other_config,
         {"dpdk-lcore-mask", "-c", false, NULL},
         {"dpdk-hugepage-dir", "--huge-dir", false, NULL},
         {"dpdk-vdev",  "--vdev", false, NULL},
-        {"dpdk-vdev1", "--vdev1", false, NULL},
-        {"dpdk-vdev2", "--vdev2", false, NULL},
-        {"dpdk-vdev3", "--vdev3", false, NULL},
     };
 
     int i, ret = initial_size;
