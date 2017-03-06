@@ -838,7 +838,7 @@ netdev_dpdk_init(struct netdev *netdev, unsigned int port_no,
     } else 
         sid = rte_lcore_to_socket_id(rte_get_master_lcore());
 
-#if 0
+#if 1
     int nports = rte_eth_dev_count ();
         VLOG_WARN(" nports = %d", nports);
     int i;
@@ -1071,11 +1071,11 @@ dpdk_bond_create(struct netdev *netdev, unsigned int port_no,
     int err = 0;
     
     eth_dev = rte_eth_dev_allocated(netdev->name);
-    if (eth_dev) {     /* bonded device exist */
+    if (eth_dev) {
+        /* bonded device exist */
          *eth_port_id = bonded_port_no = eth_dev->data->port_id;
          VLOG_INFO("add bonded device(already exist), port_no = %d\n", 
                 bonded_port_no);
-         
          if (port_no != bonded_port_no)
            {
              VLOG_INFO("config bond pord id don't match!  %d\n", 
@@ -1093,7 +1093,7 @@ dpdk_bond_create(struct netdev *netdev, unsigned int port_no,
       {
         dpdk_create_bond[bonded_port_no] = 1;
       }
-    
+    printf("-------->[%s]:[%d] bonded_port_no = %d\n", __func__, __LINE__, bonded_port_no);
     VLOG_INFO("create bonding device, port_no = %d\n", 
                 bonded_port_no);
     
@@ -1110,7 +1110,8 @@ dpdk_bond_create(struct netdev *netdev, unsigned int port_no,
 static int
 dpdk_bond_open(struct netdev *netdev, unsigned int *eth_port_id) OVS_REQUIRES(dpdk_mutex)
 {
-    unsigned int port_no;
+    unsigned int port_no = 0;
+
     int err = 0;
 
     /* Names always start with "dpdkb" */
@@ -1118,6 +1119,7 @@ dpdk_bond_open(struct netdev *netdev, unsigned int *eth_port_id) OVS_REQUIRES(dp
     if (err) {
         return err;
     }
+
 
     return dpdk_bond_create(netdev, port_no, eth_port_id);
 }
