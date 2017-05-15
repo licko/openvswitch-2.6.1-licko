@@ -143,9 +143,6 @@ BUILD_ASSERT_DECL((MAX_NB_MBUF / ROUND_DOWN_POW2(MAX_NB_MBUF/MIN_NB_MBUF))
 
 static char *vhost_sock_dir = NULL;   /* Location of vhost-user sockets */
 
-#define MAX_DPDK_BOND 16
-static uint8_t dpdk_create_bond[MAX_DPDK_BOND] = {0};  /* the max create bond is 16 */
-
 #define VHOST_ENQ_RETRY_NUM 8
 #define IF_NAME_SZ (PATH_MAX > IFNAMSIZ ? PATH_MAX : IFNAMSIZ)
 
@@ -401,6 +398,7 @@ struct netdev_rxq_dpdk {
 static bool dpdk_thread_is_pmd(void);
 
 static int netdev_dpdk_construct(struct netdev *);
+static int netdev_dpdk_bond_construct(struct netdev *);
 
 int netdev_dpdk_get_vid(const struct netdev_dpdk *dev);
 
@@ -838,7 +836,7 @@ netdev_dpdk_init(struct netdev *netdev, unsigned int port_no,
     } else 
         sid = rte_lcore_to_socket_id(rte_get_master_lcore());
 
-#if 1
+#if 0
     int nports = rte_eth_dev_count ();
         VLOG_WARN(" nports = %d", nports);
     int i;
@@ -1015,6 +1013,27 @@ netdev_dpdk_construct(struct netdev *netdev)
     return err;
 }
 
+static int netdev_dpdk_bond_construct(struct netdev *netdev)
+{
+    unsigned int port_no;
+    int err;
+
+    if (rte_eal_init_ret) {
+        return rte_eal_init_ret;
+    }
+
+    /* Names always start with "dpdk" */
+    err = dpdk_dev_parse_name(netdev->name, "dpdkb", &port_no);
+    if (err) {
+        return err;
+    }
+
+    ovs_mutex_lock(&dpdk_mutex);
+    err = netdev_dpdk_init(netdev, port_no, DPDK_DEV_ETH_BOND);
+    ovs_mutex_unlock(&dpdk_mutex);
+    return err;
+}
+
 static void
 netdev_dpdk_destruct(struct netdev *netdev)
 {
@@ -1023,175 +1042,20 @@ netdev_dpdk_destruct(struct netdev *netdev)
     ovs_mutex_lock(&dpdk_mutex);
     ovs_mutex_lock(&dev->mutex);
 
-    rte_eth_dev_stop(dev->port_id);       
-    free(ovsrcu_get_protected(struct ingress_policer *,
-                              &dev->ingress_policer));
-
-    rte_free(dev->tx_q);
-    ovs_list_remove(&dev->list_node);
-    dpdk_mp_put(dev->dpdk_mp);
-
-    ovs_mutex_unlock(&dev->mutex);
-    ovs_mutex_unlock(&dpdk_mutex);
-}
-
-#if 1
-static int
-netdev_dpdk_bond_add_slave(int bonded_port_no)
-{
-    int slave_port_no = 0, err = 0;
-    err = rte_eth_bond_slave_add(bonded_port_no, slave_port_no);
-    if(err) {
-    	VLOG_ERR("Failed to add slave (%d) to bonded port (%d).\n", 
-		slave_port_no, bonded_port_no);
-	    return err;	
-    }
-
-    slave_port_no = 1;
-    err = rte_eth_bond_slave_add(bonded_port_no, slave_port_no);
-    if(err) {
-    	VLOG_ERR("Failed to add slave (%d) to bonded port (%d).\n", 
-		slave_port_no, bonded_port_no);
-	    return err;	
-    }
-    VLOG_INFO("Added slave 0, 1 to bonded port (%d).\n", 
-                bonded_port_no);
-
-    rte_eth_bond_8023ad_setup(bonded_port_no, NULL);
-    rte_eth_promiscuous_disable(bonded_port_no);
-    return err;
-}
-
-static int
-dpdk_bond_create(struct netdev *netdev, unsigned int port_no,
-                 unsigned int *eth_port_id)
-{
-    struct rte_eth_dev *eth_dev = NULL;
-    int bonded_port_no;
-    int err = 0;
-    
-    eth_dev = rte_eth_dev_allocated(netdev->name);
-    if (eth_dev) {
-        /* bonded device exist */
-         *eth_port_id = bonded_port_no = eth_dev->data->port_id;
-         VLOG_INFO("add bonded device(already exist), port_no = %d\n", 
-                bonded_port_no);
-         if (port_no != bonded_port_no)
-           {
-             VLOG_INFO("config bond pord id don't match!  %d\n", 
-                port_no);
-           }
-         
-         return 0;
-    }
-
-    bonded_port_no = rte_eth_bond_create(netdev->name, BONDING_MODE_8023AD, SOCKET0);
-    if(bonded_port_no < 0)
-	  return -bonded_port_no;
-
-    if (bonded_port_no < MAX_DPDK_BOND)
-      {
-        dpdk_create_bond[bonded_port_no] = 1;
-      }
-    printf("-------->[%s]:[%d] bonded_port_no = %d\n", __func__, __LINE__, bonded_port_no);
-    VLOG_INFO("create bonding device, port_no = %d\n", 
-                bonded_port_no);
-    
-    *eth_port_id = bonded_port_no;
-
-    err = netdev_dpdk_bond_add_slave(bonded_port_no);
-    if (err) {
-        return err;
-    }
-   
-    return err;
-}
-
-static int
-dpdk_bond_open(struct netdev *netdev, unsigned int *eth_port_id) OVS_REQUIRES(dpdk_mutex)
-{
-    unsigned int port_no = 0;
-
-    int err = 0;
-
-    /* Names always start with "dpdkb" */
-    err = dpdk_dev_parse_name(netdev->name, "dpdkb", &port_no);
-    if (err) {
-        return err;
-    }
-
-
-    return dpdk_bond_create(netdev, port_no, eth_port_id);
-}
-
-static int
-netdev_dpdk_bond_construct(struct netdev *netdev)
-{
-    unsigned int port_no = 0;
-    int err = 0;
-
-    if (rte_eal_init_ret) {
-        return rte_eal_init_ret;
-    }
-
-    ovs_mutex_lock(&dpdk_mutex);
-
-    err = dpdk_bond_open(netdev, &port_no);
-    if (err) {
-        goto unlock_dpdk;
-    }
-
-    VLOG_INFO("dpdk ports is %d", rte_eth_dev_count());
-    
-    err = netdev_dpdk_init(netdev, port_no, DPDK_DEV_ETH_BOND);
-
-unlock_dpdk:
-    ovs_mutex_unlock(&dpdk_mutex);
-    return err;
-}
-
-static int
-remove_slaves_and_stop_bonded_device(int bonded_port_no)
-{
-	/* Clean up and remove slaves from bonded device */
-	int current_slave_count;
-	uint8_t slaves[RTE_MAX_ETHPORTS];
-        int err = 0;
-	int slave_port_no;
-
-	while((current_slave_count = rte_eth_bond_slaves_get(bonded_port_no,
-			slaves, RTE_MAX_ETHPORTS)) > 0) {
-                slave_port_no = slaves[current_slave_count-1];
-		err = rte_eth_bond_slave_remove(bonded_port_no, slave_port_no);;
-                if(err) {
-			VLOG_ERR("Failed to remove slave %d from bonded port (%d).\n",
-				slave_port_no, bonded_port_no);
-			return err;
-  		}
-		rte_eth_dev_stop(slave_port_no);
-		rte_eth_stats_reset(slave_port_no);
-		rte_eth_bond_mac_address_reset(slave_port_no);
-	}
-
-	return err;
-}
-
-static void
-netdev_dpdk_bond_destruct(struct netdev *netdev)
-{
-    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-
-    ovs_mutex_lock(&dpdk_mutex);
-    ovs_mutex_lock(&dev->mutex);
-
      /* For bonded interface, stop slave links */
-    if (dpdk_create_bond[dev->port_id] == 1)
-      {
-        remove_slaves_and_stop_bonded_device(dev->port_id);
-        dpdk_create_bond[dev->port_id] = 0;
-      }
-    
-    rte_eth_dev_stop(dev->port_id);    
+    if (dev->type == DPDK_DEV_ETH_BOND)
+   	{
+   	  unsigned char slink[16];
+   	  int nlink = rte_eth_bond_slaves_get (dev->port_id, slink, 16);
+   	  while (nlink >= 1)
+   	    {
+   	      unsigned char dpdk_port = slink[--nlink];
+   	      rte_eth_dev_stop (dpdk_port);
+   	    }
+   	}
+    else
+      rte_eth_dev_stop(dev->port_id);  
+      
     free(ovsrcu_get_protected(struct ingress_policer *,
                               &dev->ingress_policer));
 
@@ -1202,7 +1066,6 @@ netdev_dpdk_bond_destruct(struct netdev *netdev)
     ovs_mutex_unlock(&dev->mutex);
     ovs_mutex_unlock(&dpdk_mutex);
 }
-#endif
 
 /* rte_vhost_driver_unregister() can call back destroy_device(), which will
  * try to acquire 'dpdk_mutex' and possibly 'dev->mutex'.  To avoid a
@@ -3461,7 +3324,7 @@ construct_dpdk_options(const struct smap *ovs_other_config,
     } opts[] = {
         {"dpdk-lcore-mask", "-c", false, NULL},
         {"dpdk-hugepage-dir", "--huge-dir", false, NULL},
-        {"dpdk-vdev",  "--vdev", false, NULL},
+        {"dpdk-vdev", "--vdev", false, NULL},
     };
 
     int i, ret = initial_size;
@@ -3573,7 +3436,7 @@ get_dpdk_args(const struct smap *ovs_other_config, char ***argv,
                                extra_argc);
     i = construct_dpdk_mutex_options(ovs_other_config, argv, i, extra_args,
                                      extra_argc);
-    
+
     if (extra_configuration) {
         *argv = move_argv(argv, i, extra_args, extra_argc);
     }
@@ -3777,7 +3640,7 @@ static const struct netdev_class dpdk_bond_class =
     NETDEV_DPDK_CLASS(
         "dpdkb",
         netdev_dpdk_bond_construct,
-        netdev_dpdk_bond_destruct,
+        netdev_dpdk_destruct,
         netdev_dpdk_set_config,
         netdev_dpdk_set_tx_multiq,
         netdev_dpdk_eth_send,
